@@ -510,15 +510,29 @@ int sb_remove_range(SBReader *reader, size_t start, size_t end, SBError *err)
 
             range_insert_after(reader->ranges, rng0, e->pos);
 
-            e->size = start - e->pos;
-            e       = rng0->next;
+            e->size      = start - e->pos;
+            uint8_t *tmp = realloc(e->data, e->size);
+            if (tmp == NULL) {
+                snprintf(err->error, err->size, "Could not realloc split range data.");
+                return -1;
+            }
+            e->data = tmp;
+
+            e = rng0->next;
 
             continue;
         }
 
         /* Current range overlaps the start of the deletion range. */
-        if (rngstart < start)
-            e->size = start - e->pos;
+        if (rngstart < start) {
+            e->size      = start - e->pos;
+            uint8_t *tmp = realloc(e->data, e->size);
+            if (tmp == NULL) {
+                snprintf(err->error, err->size, "Could not realloc reduced range data.");
+                return -1;
+            }
+            e->data = tmp;
+        }
 
         /* current range overlaps the end of the deletion range. */
         if (rngend > end) {
