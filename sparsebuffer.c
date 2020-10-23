@@ -35,6 +35,9 @@ typedef struct SBReader {
     size_t pos;
     size_t size;
     Range *ranges;
+    void *(*malloc)(size_t size);
+    void *(*realloc)(void *ptr, size_t size);
+    void (*free)(void *ptr);
 } SBReader;
 
 /*
@@ -42,25 +45,25 @@ typedef struct SBReader {
  */
 
 /* Fees all ranges in the list. */
-static void range_free(Range **ranges)
+static void range_free(SBReader *reader, Range **ranges)
 {
     Range *cur = *ranges;
 
     while (cur != NULL) {
         Range *tmp = cur;
 
-        free(cur->data);
+        reader->free(cur->data);
 
         cur = cur->next;
 
-        free(tmp);
+        reader->free(tmp);
     }
 
     *ranges = NULL;
 }
 
 /* Removes a specific range from the list. */
-static void range_remove(Range **r, size_t pos)
+static void range_remove(SBReader *reader, Range **r, size_t pos)
 {
     Range *rm;
 
@@ -72,24 +75,24 @@ static void range_remove(Range **r, size_t pos)
     assert(rm != NULL);
 
     if (rm->prev == NULL && rm->next == NULL) {
-        range_free(r);
+        range_free(reader, r);
     } else if (rm->next == NULL) {
         rm->prev->next = NULL;
 
-        free(rm->data);
-        free(rm);
+        reader->free(rm->data);
+        reader->free(rm);
     } else if (rm->prev == NULL) {
         rm->next->prev = NULL;
         *r             = rm->next;
 
-        free(rm->data);
-        free(rm);
+        reader->free(rm->data);
+        reader->free(rm);
     } else {
         rm->prev->next = rm->next;
         rm->next->prev = rm->prev;
 
-        free(rm->data);
-        free(rm);
+        reader->free(rm->data);
+        reader->free(rm);
     }
 }
 
@@ -157,7 +160,7 @@ static bool contains(Range *a, Range *b)
 }
 
 /* Merges two ranges if necessary. */
-static int merge(Range *a, Range *b, Range *ret, bool *merged)
+static int merge(SBReader *reader, Range *a, Range *b, Range *ret, bool *merged)
 {
     if (!intersects(a, b)) {
         *merged = false;
@@ -167,7 +170,7 @@ static int merge(Range *a, Range *b, Range *ret, bool *merged)
     if (contains(a, b)) {
         ret->pos  = a->pos;
         ret->size = a->size;
-        ret->data = malloc(a->size);
+        ret->data = reader->malloc(a->size);
         if (ret->data == NULL)
             return -1;
 
@@ -179,7 +182,7 @@ static int merge(Range *a, Range *b, Range *ret, bool *merged)
     if (contains(b, a)) {
         ret->pos  = b->pos;
         ret->size = b->size;
-        ret->data = malloc(b->size);
+        ret->data = reader->malloc(b->size);
         if (ret->data == NULL)
             return -1;
 
@@ -198,7 +201,7 @@ static int merge(Range *a, Range *b, Range *ret, bool *merged)
     }
 
     size_t newsize = second->pos + second->size - first->pos;
-    uint8_t *buf   = malloc(newsize);
+    uint8_t *buf   = reader->malloc(newsize);
     if (buf == NULL)
         return -1;
 
@@ -218,7 +221,8 @@ static int merge(Range *a, Range *b, Range *ret, bool *merged)
     return 0;
 }
 
-SBReader *sb_new_reader(size_t size, SBError *err)
+SBReader *sb_new_reader_custom_alloc(size_t size, void *(*custom_alloc)(size_t size),
+                                     void *(*custom_realloc)(void *ptr, size_t size), void (*custom_free)(void *ptr), SBError *err)
 {
     SBReader *ret;
 
@@ -227,33 +231,44 @@ SBReader *sb_new_reader(size_t size, SBError *err)
         return NULL;
     }
 
-    ret = malloc(sizeof(*ret));
+    ret = custom_alloc(sizeof(*ret));
     if (ret == NULL) {
         snprintf(err->error, err->size, "Could not allocate SBReader.");
         return NULL;
     }
 
-    ret->pos    = 0;
-    ret->size   = size;
-    ret->ranges = NULL;
+    ret->pos     = 0;
+    ret->size    = size;
+    ret->ranges  = NULL;
+    ret->malloc  = custom_alloc;
+    ret->realloc = custom_realloc;
+    ret->free    = custom_free;
 
     return ret;
 }
+
+SBReader *sb_new_reader(size_t size, SBError *err)
+{
+    return sb_new_reader_custom_alloc(size, malloc, realloc, free, err);
+}
+
 
 void sb_free_reader(SBReader **reader)
 {
     SBReader *r = *reader;
 
     if (r->ranges != NULL)
-        range_free(&r->ranges);
+        range_free(*reader, &r->ranges);
 
-    free(*reader);
+    void (*custom_free)(void *ptr) = (*reader)->free;
+
+    custom_free(*reader);
     *reader = NULL;
 }
 
 void sb_clear(SBReader *reader)
 {
-    range_free(&reader->ranges);
+    range_free(reader, &reader->ranges);
 }
 
 size_t sb_bytes_left(SBReader *reader)
@@ -276,7 +291,7 @@ int sb_load_range(SBReader *reader, size_t pos, uint8_t *buf, size_t bufsize, SB
         return -1;
     }
 
-    Range *r = malloc(sizeof(*r));
+    Range *r = reader->malloc(sizeof(*r));
     if (r == NULL) {
         snprintf(err->error, err->size, "Could not allocate new range.");
         return -1;
@@ -285,9 +300,9 @@ int sb_load_range(SBReader *reader, size_t pos, uint8_t *buf, size_t bufsize, SB
     r->next = NULL;
     r->pos  = pos;
     r->size = bufsize;
-    r->data = malloc(bufsize);
+    r->data = reader->malloc(bufsize);
     if (r->data == NULL) {
-        free(r);
+        reader->free(r);
         snprintf(err->error, err->size, "Could not allocate buffer for spares list entry.");
         return -1;
     }
@@ -304,17 +319,17 @@ int sb_load_range(SBReader *reader, size_t pos, uint8_t *buf, size_t bufsize, SB
     Range mr      = { 0 };
     Range *mrange = NULL;
     for (Range *e = reader->ranges; e != NULL; e = e->next) {
-        int mret = merge(r, e, &mr, &merged);
+        int mret = merge(reader, r, e, &mr, &merged);
         if (mret < 0) {
-            free(r->data);
-            free(r);
+            reader->free(r->data);
+            reader->free(r);
             snprintf(err->error, err->size, "Could not allocate merged buffer.");
             return -1;
         }
         if (merged) {
             e->pos  = mr.pos;
             e->size = mr.size;
-            free(e->data);
+            reader->free(e->data);
             e->data = mr.data;
             mrange  = e;
             break;
@@ -329,10 +344,10 @@ int sb_load_range(SBReader *reader, size_t pos, uint8_t *buf, size_t bufsize, SB
             Range *mrng = mrange;
             for (Range *e = mrange->next; e != NULL; e = e->next) {
                 bool m;
-                int mret = merge(mrng, e, &mr, &m);
+                int mret = merge(reader, mrng, e, &mr, &m);
                 if (mret < 0) {
-                    free(r->data);
-                    free(r);
+                    reader->free(r->data);
+                    reader->free(r);
                     snprintf(err->error, err->size, "Could not allocate merged buffer.");
                     return -1;
                 }
@@ -340,10 +355,10 @@ int sb_load_range(SBReader *reader, size_t pos, uint8_t *buf, size_t bufsize, SB
                     mrange->pos  = mr.pos;
                     mrange->size = mr.size;
 
-                    free(mrange->data);
+                    reader->free(mrange->data);
                     mrange->data = mr.data;
 
-                    range_remove(&reader->ranges, e->pos);
+                    range_remove(reader, &reader->ranges, e->pos);
 
                     mergeagain = true;
                     break;
@@ -352,8 +367,8 @@ int sb_load_range(SBReader *reader, size_t pos, uint8_t *buf, size_t bufsize, SB
                 }
             }
         }
-        free(r->data);
-        free(r);
+        reader->free(r->data);
+        reader->free(r);
     } else {
         /* Just insert it as-is. */
         Range *e;
@@ -485,14 +500,14 @@ int sb_remove_range(SBReader *reader, size_t start, size_t end, SBError *err)
         /* Current range is entirely in the deletion range. */
         if (rngstart >= start && rngend <= end) {
             Range *next = e->next;
-            range_remove(&reader->ranges, e->pos);
+            range_remove(reader, &reader->ranges, e->pos);
             e = next;
             continue;
         }
 
         /* We need to split an existing range, since we're in between it. */
         if (rngend > end && rngstart < start) {
-            Range *rng0 = malloc(sizeof(Range));
+            Range *rng0 = reader->malloc(sizeof(Range));
             if (rng0 == NULL) {
                 snprintf(err->error, err->size, "Could not allocate new range buffer.");
                 return -1;
@@ -500,9 +515,9 @@ int sb_remove_range(SBReader *reader, size_t start, size_t end, SBError *err)
 
             rng0->pos  = end + 1;
             rng0->size = rngend + 1 - rng0->pos;
-            rng0->data = malloc(rng0->size);
+            rng0->data = reader->malloc(rng0->size);
             if (rng0->data == NULL) {
-                free(rng0);
+                reader->free(rng0);
                 snprintf(err->error, err->size, "Could not allocate new range data.");
                 return -1;
             }
@@ -511,7 +526,7 @@ int sb_remove_range(SBReader *reader, size_t start, size_t end, SBError *err)
             range_insert_after(reader->ranges, rng0, e->pos);
 
             e->size      = start - e->pos;
-            uint8_t *tmp = realloc(e->data, e->size);
+            uint8_t *tmp = reader->realloc(e->data, e->size);
             if (tmp == NULL) {
                 snprintf(err->error, err->size, "Could not realloc split range data.");
                 return -1;
@@ -526,7 +541,7 @@ int sb_remove_range(SBReader *reader, size_t start, size_t end, SBError *err)
         /* Current range overlaps the start of the deletion range. */
         if (rngstart < start) {
             e->size      = start - e->pos;
-            uint8_t *tmp = realloc(e->data, e->size);
+            uint8_t *tmp = reader->realloc(e->data, e->size);
             if (tmp == NULL) {
                 snprintf(err->error, err->size, "Could not realloc reduced range data.");
                 return -1;
@@ -540,14 +555,14 @@ int sb_remove_range(SBReader *reader, size_t start, size_t end, SBError *err)
             e->size -= end + 1 - e->pos;
             e->pos   = end + 1;
 
-            uint8_t *newdata = malloc(e->size);
+            uint8_t *newdata = reader->malloc(e->size);
             if (newdata == NULL) {
                 snprintf(err->error, err->size, "Could not allocate new range data.");
                 return 1;
             }
             memcpy(newdata, e->data + oldSize - e->size, e->size);
 
-            free(e->data);
+            reader->free(e->data);
 
             e->data = newdata;
         }

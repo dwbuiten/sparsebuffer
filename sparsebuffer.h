@@ -37,7 +37,7 @@ typedef enum SBWhence {
 } SBWhence;
 
 /*
- * Creates a new sparse buffer reader.
+ * Creates a new sparse buffer reader with default allocators.
  *
  * Arguments:
  *   * size - The size of the sparse buffer for the reader.
@@ -48,6 +48,23 @@ typedef enum SBWhence {
  *   after use, or NULL on error.
  */
 SBReader *sb_new_reader(size_t size, SBError *err);
+
+/*
+ * Creates a new sparse buffer reader with user-provided allocators.
+ *
+ * Arguments:
+ *   * size           - The size of the sparse buffer for the reader.
+ *   * custom_alloc   - User provided allocation function, which must have the same semantics as malloc.
+ *   * custom_realloc - User provided reallocation function, which must have the same semantics as realloc.
+ *   * custom_free    - User provided free functon, which must have the same semntics as free.
+ *   * err            - A user supplied error buffer.
+ *
+ * Returns:
+ *   A new sparse buffer reader, which must be freed with sb_free_reader()
+ *   after use, or NULL on error.
+ */
+SBReader *sb_new_reader_custom_alloc(size_t size, void *(*custom_alloc)(size_t size),
+                                     void *(*custom_realloc)(void *ptr, size_t size), void (*custom_free)(void *ptr), SBError *err);
 
 /*
  * Frees a sparse buffer reader and sets it to NULL;

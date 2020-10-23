@@ -7,6 +7,8 @@ in memory, and available to be read. All gaps in between these ranges read zeroe
 This is a C version of a Go package written primarily by Justin Ruggles (@justinruggles),
 and used in Vimeo's edge CDN packager.
 
+It supports custom allocators.
+
 How to use it?
 --------------
 

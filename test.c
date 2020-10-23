@@ -14,6 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <assert.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -22,12 +23,44 @@
 
 #include "sparsebuffer.h"
 
+void *test_alloc(size_t size)
+{
+    char *ptr = malloc(size + 4);
+    if (ptr == NULL)
+        return NULL;
+
+    ptr[0] = 'T';
+    ptr[1] = 'E';
+    ptr[2] = 'S';
+    ptr[3] = 'T';
+
+    return (void *)(ptr + 4);
+}
+
+void *test_realloc(void *ptr, size_t size)
+{
+    assert(!memcmp(ptr - 4, "TEST", 4));
+
+    void *newptr = realloc(ptr - 4, size + 4);
+    if (newptr == NULL)
+        return NULL;
+
+    return newptr + 4;
+}
+
+void test_free(void *ptr)
+{
+    assert(!memcmp(ptr - 4, "TEST", 4));
+
+    free(ptr - 4);
+}
+
 int main()
 {
     char e[1024];
     SBError err = { &e[0], 1024 };
 
-    SBReader *r = sb_new_reader(50, &err);
+    SBReader *r = sb_new_reader_custom_alloc(50, test_alloc, test_realloc, test_free, &err);
     if (r == NULL) {
         printf("Failed to make new reader: %s\n", err.error);
         return 1;
@@ -70,7 +103,7 @@ int main()
 
     sb_free_reader(&r);
 
-    r = sb_new_reader(50, &err);
+    r = sb_new_reader_custom_alloc(50, test_alloc, test_realloc, test_free, &err);
     if (r == NULL) {
         printf("Failed to make new reader: %s\n", err.error);
         return 1;
