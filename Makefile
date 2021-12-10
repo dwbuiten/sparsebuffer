@@ -13,7 +13,7 @@ libsparsebuffer.so: sparsebuffer.o
 install: all
 	@install -v sparsebuffer.h $(PREFIX)/include
 	@install -v libsparsebuffer.so $(PREFIX)/lib/libsparsebuffer.so.1
-	@ln -sv libsparsebuffer.so.1 $(PREFIX)/lib/libsparsebuffer.so
+	@ln -sfv libsparsebuffer.so.1 $(PREFIX)/lib/libsparsebuffer.so
 
 uninstall:
 	@rm -fv $(PREFIX)/include/sparsebuffer.h
