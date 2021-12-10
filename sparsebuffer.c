@@ -439,6 +439,8 @@ size_t sb_read(SBReader *reader, uint8_t *buf, size_t size, SBError *err)
         return 0;
     }
 
+    reader->pos += size;
+
     return size;
 }
 
